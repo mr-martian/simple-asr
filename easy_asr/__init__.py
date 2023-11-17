@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-from ffmpeg import FFmpeg
+from datasets import Dataset
+#from ffmpeg import FFmpeg
 import torch
 import torchaudio
 from transformers import Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
@@ -181,6 +182,7 @@ def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
     }
     for name, lines in sections.items():
         with open(os.path.join(directory, name+'.tsv'), 'w') as fout:
+            fout.write('audio\tstart\tend\ttext\n')
             fout.write('\n'.join(lines) + '\n')
     char_dict = {c:i for i,c in enumerate(sorted(all_chars))}
     char_dict['|'] = char_dict[' ']
@@ -201,22 +203,20 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
     sampling_rate = 16000
     ret = []
     dirname = os.path.dirname(path)
-    with open(path) as fin:
-        for line in fin:
-            ls = line.strip().split('\t')
-            if len(ls) != 4:
-                continue
-            text = ls[3]
-            start = int(float(ls[1])*sampling_rate)
-            end = int(float(ls[2])*sampling_rate)
-            speech, _ = torchaudio.load(os.path.join(dirname, ls[0]),
-                                        frame_offset=start,
-                                        num_frames=(end-start))
-            inputs = processor(speech, sampling_rate=sampling_rate, padding=True).input_values
-            with processor.as_target_processor():
-                labels = processor(text).input_ids
-            ret.append({'input_values': inputs, 'labels': labels})
-    return ret
+    data = Dataset.from_csv(path, sep='\t')
+    def load_audio(entry):
+        nonlocal sampling_rate, dirname, processor
+        start = int(float(entry['start'])*sampling_rate)
+        end = int(float(entry['end'])*sampling_rate)
+        speech, _ = torchaudio.load(os.path.join(dirname, entry['audio']),
+                                    frame_offset=start,
+                                    num_frames=(end-start))
+        inputs = processor(speech, sampling_rate=sampling_rate, padding=True)
+        with processor.as_target_processor():
+            labels = processor(entry['text']).input_ids
+        return {'input_values': inputs, 'labels': labels}
+    data.map(load_audio)
+    return data
 
 # originally from https://github.com/huggingface/transformers/blob/9a06b6b11bdfc42eea08fa91d0c737d1863c99e3/examples/research_projects/wav2vec2/run_asr.py#L81
 @dataclass
