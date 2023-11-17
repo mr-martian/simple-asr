@@ -11,8 +11,10 @@ from dataclasses import dataclass
 import json
 import os.path
 import random
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple, Sequence, Set, Union
 import unicodedata
+from xml.etree import ElementTree as ET
 
 ### Functions
 
@@ -92,15 +94,16 @@ def downsample_audio(path: str, out_dir: str) -> str:
     name, ext = os.path.splitext(fname)
     out_name = name + '.wav'
     out_path = os.path.join(out_dir, out_name)
-    f = (
-        FFmpeg()
-        .option('y')           # if the output file already exists, overwrite it
-        .input(path)           # read the input file
-        .option('ac', '1')     # output as mono (not stereo) sound
-        .option('ar', '16000') # as 16kHz
-        .output(out_path)      # write to the output path
-    )
-    f.execute()
+    #f = (
+    #    FFmpeg()
+    #    .option('y')           # if the output file already exists, overwrite it
+    #    .input(path)           # read the input file
+    #    .option('ac', '1')     # output as mono (not stereo) sound
+    #    .option('ar', '16000') # as 16kHz
+    #    .output(out_path)      # write to the output path
+    #)
+    #f.execute()
+    subprocess.run(['ffmpeg', '-y', '-i', path, '-ac', '1', '-ar', '16000', out_path], check=True)
     return out_name
 
 def load_manifest(directory: str) -> Set[str]:
@@ -149,7 +152,7 @@ def add_elan_file(audio_path: str, elan_path: str, tiernames: Sequence[str],
             fout.write(''.join(f'{x[0]}\t{x[1]}\t{x[2]}\n' for x in annotations))
 
 def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
-    manifest = load_manifest(out_dir)
+    manifest = load_manifest(directory)
     annotations = []
     all_chars = set()
     with open(os.path.join(directory, 'clean.tsv'), 'w') as fout:
@@ -353,7 +356,7 @@ def cli_split():
     parser.add_argument('--keep', '-k', action='store')
     args = parser.parse_args()
     split_data(args.data_dir,
-               lambda s: clean_text_unicode(s, charactersToKeep=list(s or '')))
+               lambda s: clean_text_unicode(s, charactersToKeep=list(args.keep or '')).lower())
 
 def cli_predict():
     pass
