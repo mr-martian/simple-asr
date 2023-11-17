@@ -200,6 +200,7 @@ def make_processor(directory: str) -> Wav2Vec2Processor:
 def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
     sampling_rate = 16000
     ret = []
+    dirname = os.path.dirname(path)
     with open(path) as fin:
         for line in fin:
             ls = line.strip().split('\t')
@@ -208,7 +209,8 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
             text = ls[3]
             start = int(float(ls[1])*sampling_rate)
             end = int(float(ls[2])*sampling_rate)
-            speech, _ = torchaudio.load(ls[0], frame_offset=start,
+            speech, _ = torchaudio.load(os.path.join(dirname, ls[0]),
+                                        frame_offset=start,
                                         num_frames=(end-start))
             inputs = processor(speech, sampling_rate=sampling_rate).input_values
             with processor.as_target_processor():
