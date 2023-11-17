@@ -212,7 +212,7 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
             speech, _ = torchaudio.load(os.path.join(dirname, ls[0]),
                                         frame_offset=start,
                                         num_frames=(end-start))
-            inputs = processor(speech, sampling_rate=sampling_rate).input_values
+            inputs = processor(speech, sampling_rate=sampling_rate, padding=True).input_values
             with processor.as_target_processor():
                 labels = processor(text).input_ids
             ret.append({'input_values': inputs, 'labels': labels})
