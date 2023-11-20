@@ -219,9 +219,9 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
         return entry
     def pad_audio(batch):
         nonlocal sampling_rate, processor
-        batch['input_values'] = processor(batch['speech'], sampling_rate=sampling_rate).input_values
-        with processor.as_target_processor():
-            batch['labels'] = processor(batch['text']).input_ids
+        ret = processor(batch['speech'], sampling_rate=sampling_rate)
+        batch['input_values'] = ret.input_values
+        batch['labels'] = ret.labels
         return batch
     data = Dataset.from_csv(path, sep='\t')
     # There have to be 2 separate map() steps because one is batched and the other isn't
@@ -350,6 +350,12 @@ def train_on_data(processor, out_dir, train, dev,
     )
     trainer.train()
 
+def train(data_dir: str, model_dir: str, **kwargs):
+    processor = make_processor(data_dir, model_dir)
+    train = load_samples(os.path.join(data_dir, 'train.tsv'), processor)
+    dev = load_samples(os.path.join(data_dir, 'dev.tsv'), processor)
+    train_on_data(processor, model_dir, train, dev, **kwargs)
+
 def list_checkpoints(model_dir: str):
     return glob.glob('checkpoint-*', root_dir=model_dir)
 
@@ -397,12 +403,9 @@ def cli_cv():
 def cli_train():
     parser = argparse.ArgumentParser('Train an ASR model')
     parser.add_argument('data_dir', action='store')
+    parser.add_argument('model_dir', action='store')
     args = parser.parse_args()
-    proc = make_processor(args.data_dir)
-    train = load_samples(os.path.join(args.data_dir, 'train.tsv'), proc)
-    dev = load_samples(os.path.join(args.data_dir, 'dev.tsv'), proc)
-    test = load_samples(os.path.join(args.data_dir, 'test.tsv'), proc)
-    train_on_data(proc, args.data_dir, train, dev)
+    train(args.data_dir, args.model_dir)
 
 def cli_split():
     parser = argparse.ArgumentParser('Split data into train, dev, and test sections')
