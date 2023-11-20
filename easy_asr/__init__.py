@@ -296,7 +296,7 @@ def metric_computer(metrics, processor):
         prediction.label_ids[prediction.label_ids == -100] = processor.tokenizer.pad_token_id
         pred_str = processor.batch_decode(pred_ids)
         # we do not want to group tokens when computing the metrics
-        label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
+        label_str = processor.batch_decode(prediction.label_ids, group_tokens=False)
         ret = {}
         for k, v in metrics.items():
             ret[k] = v.compute(predictions=pred_str, references=label_str)
