@@ -2,6 +2,7 @@
 
 from datasets import Dataset
 #from ffmpeg import FFmpeg
+import numpy as np
 import torch
 import torchaudio
 from transformers import Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
@@ -104,7 +105,8 @@ def downsample_audio(path: str, out_dir: str) -> str:
     #    .output(out_path)      # write to the output path
     #)
     #f.execute()
-    subprocess.run(['ffmpeg', '-y', '-i', path, '-ac', '1', '-ar', '16000', out_path], check=True)
+    subprocess.run(['ffmpeg', '-y', '-i', path, '-ac', '1', '-ar', '16000', out_path], check=True,
+                   capture_output=True)
     return out_name
 
 def load_manifest(directory: str) -> Set[str]:
@@ -284,8 +286,23 @@ class DataCollatorCTCWithPadding:
 
         return batch
 
-def compute_metrics(prediction):
-    return {}
+def metric_computer(metrics, processor):
+    def compute_metrics(prediction):
+        pred_logits = prediction.predictions
+        pred_ids = np.argmax(pred_logits, axis=-1)
+        pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
+        pred_str = processor.batch_decode(pred_ids)
+        # we do not want to group tokens when computing the metrics
+        label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
+        ret = {}
+        for k, v in metrics.items():
+            ret[k] = v.compute(predictions=pred_str, references=label_str)
+        return ret
+    return compute_metrics
+
+def compute_wer(processor):
+    import evaluate
+    return metric_computer({'wer': evaluate.load('wer')}, processor)
 
 def train_on_data(processor, out_dir, train, dev,
                   epochs: int = 100):
@@ -322,7 +339,7 @@ def train_on_data(processor, out_dir, train, dev,
         model=model,
         data_collator=data_collator,
         args=training_args,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_wer(processor),
         train_dataset=train,
         eval_dataset=dev,
         tokenizer=processor.feature_extractor,
