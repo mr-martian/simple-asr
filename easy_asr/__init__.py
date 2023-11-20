@@ -219,7 +219,7 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
         return entry
     def pad_audio(batch):
         nonlocal sampling_rate, processor
-        ret = processor(batch['speech'], sampling_rate=sampling_rate)
+        ret = processor(batch['speech'], sampling_rate=sampling_rate, text=batch['text'])
         batch['input_values'] = ret.input_values
         batch['labels'] = ret.labels
         return batch
