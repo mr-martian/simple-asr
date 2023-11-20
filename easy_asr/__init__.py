@@ -201,22 +201,25 @@ def make_processor(directory: str) -> Wav2Vec2Processor:
 
 def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
     sampling_rate = 16000
-    ret = []
     dirname = os.path.dirname(path)
-    data = Dataset.from_csv(path, sep='\t')
     def load_audio(entry):
-        nonlocal sampling_rate, dirname, processor
+        nonlocal sampling_rate, dirname
         start = int(float(entry['start'])*sampling_rate)
         end = int(float(entry['end'])*sampling_rate)
         speech, _ = torchaudio.load(os.path.join(dirname, entry['audio']),
                                     frame_offset=start,
                                     num_frames=(end-start))
-        inputs = processor(speech, sampling_rate=sampling_rate, padding=True)
+        entry['speech'] = speech[0].numpy()
+        return entry
+    def pad_audio(batch):
+        nonlocal sampling_rate, processor
+        batch['input_values'] = processor(batch['speech'], sampling_rate=sampling_rate).input_values
         with processor.as_target_processor():
-            labels = processor(entry['text']).input_ids
-        return {'input_values': inputs, 'labels': labels}
-    data.map(load_audio)
-    return data
+            batch['labels'] = processor(batch['text']).input_ids
+        return batch
+    data = Dataset.from_csv(path, sep='\t')
+    # There have to be 2 separate map() steps because one is batched and the other isn't
+    return data.map(load_audio).map(pad_audio, batch_size=8, num_proc=4, batched=True)
 
 # originally from https://github.com/huggingface/transformers/blob/9a06b6b11bdfc42eea08fa91d0c737d1863c99e3/examples/research_projects/wav2vec2/run_asr.py#L81
 @dataclass
