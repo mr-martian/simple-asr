@@ -10,6 +10,7 @@ from transformers import Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2V
 import argparse
 from collections.abc import Callable
 from dataclasses import dataclass
+import glob
 import json
 import os.path
 import random
@@ -194,11 +195,13 @@ def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
     with open(os.path.join(directory, 'vocab.json'), 'w') as fout:
         json.dump(char_dict, fout)
 
-def make_processor(directory: str) -> Wav2Vec2Processor:
-    vocab = os.path.join(directory, 'vocab.json')
+def make_processor(data_dir: str, model_dir: Optional[str] = None) -> Wav2Vec2Processor:
+    vocab = os.path.join(data_dir, 'vocab.json')
     tokenizer = Wav2Vec2CTCTokenizer(vocab, unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
     feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, padding_value=0.0, do_normalize=True, return_attention_mask=True)
     processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    if model_dir is not None:
+        processor.save_pretrained(model_dir)
     return processor
 
 def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
@@ -290,7 +293,7 @@ def metric_computer(metrics, processor):
     def compute_metrics(prediction):
         pred_logits = prediction.predictions
         pred_ids = np.argmax(pred_logits, axis=-1)
-        pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
+        pred.label_ids[prediction.label_ids == -100] = processor.tokenizer.pad_token_id
         pred_str = processor.batch_decode(pred_ids)
         # we do not want to group tokens when computing the metrics
         label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
@@ -345,6 +348,27 @@ def train_on_data(processor, out_dir, train, dev,
         tokenizer=processor.feature_extractor,
     )
     trainer.train()
+
+def list_checkpoints(model_dir: str):
+    return glob.glob('checkpoint-*', root_dir=model_dir)
+
+def load_processor(model_dir: str):
+    return Wav2Vec2Processor.from_pretrained(model_dir)
+
+def load_checkpoint(model_dir: str, checkpoint: str):
+    return Wav2Vec2ForCTC.from_pretrained(os.path.join(model_dir, checkpoint)).to('cuda')
+
+def predict_tensor(tensor, model, processor):
+    input_dict = processor(tensor, return_tensors='pt', padding=True)
+    logits = model(input_dict.input_values.to('cuda')).logits
+    pred_ids = torch.argmax(logits, dim=-1)[0]
+    return processor.decode(pred_ids)
+
+def predict_test_set(data, model, processor):
+    def pred(sample):
+        sample['prediction'] = predict_tensor(sample['input_values'], model, processor)
+        return sample
+    return data.map(pred)
 
 ### CLI
 
