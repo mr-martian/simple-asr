@@ -2,6 +2,7 @@
 
 from datasets import Dataset
 #from ffmpeg import FFmpeg
+import jiwer
 import numpy as np
 import torch
 import torchaudio
@@ -359,7 +360,7 @@ def load_checkpoint(model_dir: str, checkpoint: str):
     return Wav2Vec2ForCTC.from_pretrained(os.path.join(model_dir, checkpoint)).to('cuda')
 
 def predict_tensor(tensor, model, processor):
-    input_dict = processor(tensor, return_tensors='pt', padding=True)
+    input_dict = processor(tensor, return_tensors='pt', padding=True, sampling_rate=16000)
     logits = model(input_dict.input_values.to('cuda')).logits
     pred_ids = torch.argmax(logits, dim=-1)[0]
     return processor.decode(pred_ids)
@@ -369,6 +370,13 @@ def predict_test_set(data, model, processor):
         sample['prediction'] = predict_tensor(sample['input_values'], model, processor)
         return sample
     return data.map(pred)
+
+def evaluate_test_set(data):
+    def ev(sample):
+        sample['wer'] = jiwer.wer(sample['text'].lower(), sample['prediction'])
+        sample['cer'] = jiwer.cer(sample['text'].lower(), sample['prediction'])
+        return sample
+    return data.map(ev)
 
 ### CLI
 
