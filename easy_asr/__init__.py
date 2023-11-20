@@ -15,6 +15,7 @@ import glob
 import json
 import os.path
 import random
+import statistics
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple, Sequence, Set, Union
 import unicodedata
@@ -205,7 +206,7 @@ def make_processor(data_dir: str, model_dir: Optional[str] = None) -> Wav2Vec2Pr
         processor.save_pretrained(model_dir)
     return processor
 
-def load_samples(path: str, processor: Wav2Vec2Processor) -> Any: # TODO
+def load_samples(path: str, processor: Wav2Vec2Processor) -> Dataset:
     sampling_rate = 16000
     dirname = os.path.dirname(path)
     def load_audio(entry):
@@ -274,14 +275,13 @@ class DataCollatorCTCWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors="pt",
         )
-        with self.processor.as_target_processor():
-            labels_batch = self.processor.pad(
-                label_features,
-                padding=self.padding,
-                max_length=self.max_length_labels,
-                pad_to_multiple_of=self.pad_to_multiple_of_labels,
-                return_tensors="pt",
-            )
+        labels_batch = self.processor.pad(
+            text=label_features,
+            padding=self.padding,
+            max_length=self.max_length_labels,
+            pad_to_multiple_of=self.pad_to_multiple_of_labels,
+            return_tensors="pt",
+        )
 
         # replace padding with -100 to ignore loss correctly
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
@@ -322,7 +322,7 @@ def train_on_data(processor, out_dir, train, dev,
         pad_token_id=processor.tokenizer.pad_token_id,
         vocab_size=len(processor.tokenizer)
     )
-    model.freeze_feature_extractor()
+    model.freeze_feature_encoder()
     training_args = TrainingArguments(
         output_dir=out_dir,
         group_by_length=True,
@@ -383,6 +383,38 @@ def evaluate_test_set(data):
         sample['cer'] = jiwer.cer(sample['text'].lower(), sample['prediction'])
         return sample
     return data.map(ev)
+
+def evaluate_checkpoint(data, model_dir: str, checkpoint: str, processor=None, out_file: Optional[str] = None):
+    proc = processor if processor is not None else load_processor(model_dir)
+    model = load_checkpoint(model_dir, checkpoint)
+    pred_data = evaluate_test_set(predict_test_set(data, model, proc))
+    cer = statistics.median([s['cer'] for s in pred_data])
+    wer = statistics.median([s['wer'] for s in pred_data])
+    if out_file:
+        lns = ['file\texpected\toutput\tWER\tCER\n']
+        for s in pred_data:
+            lns.append(f"{s['audio']}\t{s['text']}\t{s['prediction']}\t{round(s['wer'],2)}\t{round(s['cer'],2)}\n")
+        with open(out_file, 'w') as fout:
+            fout.write(''.join(lns))
+    return cer, wer
+
+def evaluate_all_checkpoints(data_dir: str, model_dir: str, log_dir: Optional[str] = None):
+    proc = load_processor(model_dir)
+    checkpoints = list_checkpoints(model_dir)
+    data = load_samples(os.path.join(data_dir, 'test.tsv'), proc)
+    scores = {}
+    for chk in checkpoints:
+        out_file = None
+        if log_dir is not None:
+            out_file = os.path.join(log_dir, f'{chk}.log.tsv')
+        scores[chk] = evaluate_checkpoint(data, model_dir, chk, proc, out_file)
+    if log_dir is not None:
+        with open(os.path.join(log_dir, 'median.tsv'), 'w') as fout:
+            fout.write('checkpoint\tCER\tWER\n')
+            for chk in sorted(scores, key=lambda c: int(c.split('-')[1])):
+                cer, wer = scores[chk]
+                fout.write(f'{chk}\t{cer}\t{wer}\n')
+    return scores
 
 ### CLI
 
