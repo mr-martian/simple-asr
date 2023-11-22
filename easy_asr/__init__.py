@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import glob
 import json
 import os.path
+import pathlib
 import random
 import statistics
 import subprocess
@@ -135,6 +136,7 @@ def add_audio(path: str, out_dir: str,
 
     If this function is being called in a loop, it can be passed the result
     of calling `load_manifest(out_dir)` to save disk reads.'''
+    pathlib.Path(out_dir).mkdir(exist_ok=True)
     if manifest is None and not overwrite:
         manifest = load_manifest(out_dir)
     name = os.path.basename(path)
@@ -432,13 +434,6 @@ def cli_elan():
 def cli_cv():
     pass
 
-def cli_train():
-    parser = argparse.ArgumentParser('Train an ASR model')
-    parser.add_argument('data_dir', action='store')
-    parser.add_argument('model_dir', action='store')
-    args = parser.parse_args()
-    train(args.data_dir, args.model_dir)
-
 def cli_split():
     parser = argparse.ArgumentParser('Split data into train, dev, and test sections')
     parser.add_argument('data_dir', action='store')
@@ -446,6 +441,22 @@ def cli_split():
     args = parser.parse_args()
     split_data(args.data_dir,
                lambda s: clean_text_unicode(s, charactersToKeep=list(args.keep or '')).lower())
+
+def cli_train():
+    parser = argparse.ArgumentParser('Train an ASR model')
+    parser.add_argument('data_dir', action='store')
+    parser.add_argument('model_dir', action='store')
+    parser.add_argument('--epochs', '-e', type=int, default=100)
+    args = parser.parse_args()
+    train(args.data_dir, args.model_dir, epochs=args.epochs)
+
+def cli_eval():
+    parser = argparse.ArgumentParser('Evaluate an ASR model')
+    parser.add_argument('data_dir', action='store')
+    parser.add_argument('model_dir', action='store')
+    args = parser.parse_args()
+    evaluate_all_checkpoints(args.data_dir, args.model_dir, args.model_dir)
+    print(f'Wrote evaluation logs to {args.model_dir}.')
 
 def cli_predict():
     pass
