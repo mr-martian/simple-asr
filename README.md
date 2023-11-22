@@ -17,7 +17,7 @@ drive.mount('/content/drive/', force_remount=True)
 !easy-asr-elan /content/drive/MyDrive/path/to/audio.wav /content/drive/MyDrive/path/to/elan.eaf /content/data default
 !easy-asr-split /content/data
 !easy-asr-train /content/data /content/model -e 140
-!easy-asr-eval /content/data /content/model
+!easy-asr-evaluate /content/data /content/model
 ```
 
 This will result in there being model checkpoints in `/content/model` which can then be copied to your drive.
