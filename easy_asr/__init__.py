@@ -159,7 +159,35 @@ def add_elan_file(audio_path: str, elan_path: str, tiernames: Sequence[str],
         with open(os.path.join(out_dir, name + '.segments.tsv'), 'w') as fout:
             fout.write(''.join(f'{x[0]}\t{x[1]}\t{x[2]}\n' for x in annotations))
 
-def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
+def add_common_voice_files(cv_dir: str, data_dir: str,
+                           overwrite: bool = False, use_other: bool = False):
+    times = {}
+    with open(os.path.join(cv_dir, 'times.txt')) as fin:
+        for line in fin:
+            if not line.strip():
+                continue
+            fname = line.split('`')[1].split('/')[-1]
+            tm = line.split('=')[-1].strip()
+            times[fname] = int(tm) / 1000
+    tsv_files_to_read = [os.path.join(cv_dir, 'validated.tsv')]
+    if use_other:
+        tsv_files_to_read.append(os.path.join(cv_dir, 'other.tsv'))
+    for tsv_fname in tsv_files_to_read:
+        with open(tsv_fname) as fin:
+            for i, line in enumerate(fin):
+                if i == 0 or not line.strip():
+                    continue
+                ls = line.split('\t')
+                audio = ls[1]
+                segments = os.path.splitext(audio)[0] + '.segments.tsv'
+                sentence = ls[2]
+                add_audio(os.path.join(cv_dir, 'clips', audio), data_dir,
+                          overwrite=overwrite)
+                with open(os.path.join(data_dir, segments), 'w') as fout:
+                    fout.write(f'0.0\t{times[audio]}\t{sentence}\n')
+
+# TODO: what are the python version restrictions on these type annotations?
+def split_data(directory: str, clean_fn):#: Callable[[str], str]) -> None:
     manifest = load_manifest(directory)
     annotations = []
     all_chars = set()
@@ -432,7 +460,15 @@ def cli_elan():
                   overwrite=args.overwrite)
 
 def cli_cv():
-    pass
+    parser = argparse.ArgumentParser('Preprocess a Mozilla Common Voice directory for ASR training')
+    parser.add_argument('cv_dir', action='store')
+    parser.add_argument('data_dir', action='store')
+    parser.add_argument('--overwrite', '-o', action='store_true')
+    parser.add_argument('--all', '-a', action='store_true',
+                        help='Include clips listed in other.tsv in addition to validated.tsv')
+    args = parser.parse_args()
+    add_common_voice_files(args.cv_dir, args.data_dir,
+                           overwrite=args.overwrite, use_other=args.all)
 
 def cli_split():
     parser = argparse.ArgumentParser('Split data into train, dev, and test sections')
