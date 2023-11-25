@@ -9,7 +9,6 @@ import torchaudio
 from transformers import Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
 
 import argparse
-from collections.abc import Callable
 from dataclasses import dataclass
 import glob
 import json
@@ -18,7 +17,7 @@ import pathlib
 import random
 import statistics
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple, Sequence, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Sequence, Set, Union
 import unicodedata
 from xml.etree import ElementTree as ET
 
@@ -30,17 +29,33 @@ def clean_text_unicode(text: str,
                        useCodeSwitchData: bool = True,
                        doubtfulSymbol: str = '[D]',
                        useDoubtfulData: bool = True) -> str:
-    '''Strip non-word characters from `text` based on Unicode character classes
-    `charactersToKeep`: a list of punctuation characters to retain
-    `codeSwitchSymbol`: symbol which indicates that `text` contains codeswitching
-    `useCodeSwitchData`: whether codeswitched data should be included in training
-    `doubtfulSymbol`: symbol which indicates that `text` is uncertain
-    `useDoubtfulData`: where doubtful data should be included in training
+    """Strip non-word characters based on Unicode character classes.
+
+    :param text: The string to be cleaned
+    :type text: str
+    :param charactersToKeep: A list of punctuation characters to retain
+    :type charactersToKeep: list, optional
+    :param codeSwitchSymbol: A symbol which indicates that the contents of
+        ``text`` include codeswitching. The symbol will be removed from ``text``,
+        defaults to `'[C]'`
+    :type codeSwitchSymbol: str, optional
+    :param useCodeSwitchData: If `False` and ``codeSwitchSymbole`` is present
+        in ``text``, return an empty string, defaults to `True`
+    :type useCodeSwitchData: bool, optional
+    :param doubtfulSymbol: A symbol that incdicates that the contents of
+        ``text`` are uncertain. The symbol will be removed from ``text``,
+        defaults to `'[D]'`
+    :type doubtfulSymbol: str, optional
+    :param useDoubtfulData: where doubtful data should be included in training
+    :type useDoubtfulData: bool, optional
+    :return: The cleaned string, or an empty string if codeswitched or
+        uncertain annotations have been excluded
+    :rtype: str
 
     The marker symbols will be removed from `text`. If either marker is present
     and the corresponding flag is False, the function will return an empty
     string.
-    '''
+    """
     s = text
     if codeSwitchSymbol in s:
         if useCodeSwitchData:
@@ -64,9 +79,15 @@ def clean_text_unicode(text: str,
     return ' '.join(''.join(ls).split())
 
 def load_eaf(path: str, tiernames: List[str]) -> List[Tuple[float, float, str]]:
-    '''Read ELAN file and extract annotations in specified tiers
-    `path`: path to the ELAN (.eaf) file
-    `tiernames`: a list of names of tiers to extract'''
+    """Read an ELAN file and extract annotations in specified tiers
+
+    :param path: The path to the ELAN (.eaf) file
+    :type path: str
+    :param tiernames: A list of names of tiers to extract
+    :type tiernames: list
+    :return: A list of non-empty annotations as tuples of `(start, end, text)`
+    :rtype: list
+    """
     root = ET.parse(path).getroot()
     times = {}
     for slot in root.iter('TIME_SLOT'):
@@ -93,31 +114,39 @@ def load_eaf(path: str, tiernames: List[str]) -> List[Tuple[float, float, str]]:
     return ret
 
 def downsample_audio(path: str, out_dir: str) -> str:
-    '''Copy `path` into `out_dir` as a 16kHz .wav file
+    """Copy an audio file to a specified directory as a 16kHz .wav file
 
-    Returns the name (not the full path) of the generated file'''
+    :param path: The path to the original file
+    :type path: str
+    :param out_dir: The path to the destination directory
+    :type out_dir: str
+    :return: The name (not the full path) of the generated file
+    :rtype: str
+    """
     fname = os.path.basename(path)
     name, ext = os.path.splitext(fname)
     out_name = name + '.wav'
     out_path = os.path.join(out_dir, out_name)
-    #f = (
-    #    FFmpeg()
-    #    .option('y')           # if the output file already exists, overwrite it
-    #    .input(path)           # read the input file
-    #    .option('ac', '1')     # output as mono (not stereo) sound
-    #    .option('ar', '16000') # as 16kHz
-    #    .output(out_path)      # write to the output path
-    #)
-    #f.execute()
-    subprocess.run(['ffmpeg', '-y', '-i', path, '-ac', '1', '-ar', '16000', out_path], check=True,
-                   capture_output=True)
+    subprocess.run(['ffmpeg', '-y',      # overwrite
+                    '-i', path,          # read input file
+                    '-ac', '1',          # output as mono sound (not stereo)
+                    '-ar', '16000',      # output as 16kHz
+                    out_path],           # write to output file
+                   check=True,           # propogate errors to caller
+                   capture_output=True)  # don't show debug info
     return out_name
 
 def load_manifest(directory: str) -> Set[str]:
-    '''Retrieve the contents of MANIFEST.txt from `directory`
+    """Retrieve the contents of the manifest file from a directory.
 
-    This is the list of audio files which have already been downsampled
-    by previous runs of the preprocessing commands.'''
+    :param directory: The directory to read from
+    :type directory: str
+    :return: The names of the audio files listed in the manifest
+    :rtype: set
+
+    Preprocessing an audio file via :func:`add_audio` causes it to be
+    listed in ``MANIFEST.txt`` (one filename per line, unsorted).
+    """
     path = os.path.join(directory, 'MANIFEST.txt')
     if os.path.exists(path):
         with open(path) as fin:
@@ -128,14 +157,22 @@ def load_manifest(directory: str) -> Set[str]:
 def add_audio(path: str, out_dir: str,
               overwrite: bool = False,
               manifest: Optional[Set[str]] = None) -> bool:
-    '''Add an audio file to the data directory if it does not already exist
-    `path`: the path to the audio file
-    `out_dir`: the data directory
-    `overwrite`: if True, copy the file even if already present (default: False)
-    `manifest`: contents of MANIFEST.txt
+    """Add an audio file to the data directory if it does not already exist.
+
+    :param path: The path to the audio file
+    :type path: str
+    :param out_dir: The data directory
+    :type out_dir: str
+    :param overwrite: If ``True``, do not check whether the file has already
+        been copied to `out_dir`, defaults to ``False``
+    :type overwrite: bool, optional
+    :param manifest: The contents of the manifest file
+        (see :func:`load_manifest`)
+    :type manifest: set
 
     If this function is being called in a loop, it can be passed the result
-    of calling `load_manifest(out_dir)` to save disk reads.'''
+    of calling ``load_manifest(out_dir)`` to save disk reads.
+    """
     pathlib.Path(out_dir).mkdir(exist_ok=True)
     if manifest is None and not overwrite:
         manifest = load_manifest(out_dir)
@@ -186,8 +223,20 @@ def add_common_voice_files(cv_dir: str, data_dir: str,
                 with open(os.path.join(data_dir, segments), 'w') as fout:
                     fout.write(f'0.0\t{times[audio]}\t{sentence}\n')
 
-# TODO: what are the python version restrictions on these type annotations?
-def split_data(directory: str, clean_fn):#: Callable[[str], str]) -> None:
+def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
+    """Split data into training, development, and testing sections.
+
+    :param directory: The directory to read from
+    :type directory: str
+    :param clean_fn: A callback to clean the text
+
+    Load the manifest (see :func:`load_manifest`) and read the segments
+    file for each listed audio file. Shuffle this list and assign 80% to
+    training, 10% to development, and 10% to testing. Apply the cleaning
+    function and write as 3 .tsv files: ``train.tsv``, ``dev.tsv``, and
+    ``test.tsv``. Additionally, write the alphabet of the cleaned text
+    to ``vocab.json``.
+    """
     manifest = load_manifest(directory)
     annotations = []
     all_chars = set()
@@ -237,9 +286,28 @@ def make_processor(data_dir: str, model_dir: Optional[str] = None) -> Wav2Vec2Pr
     return processor
 
 def load_samples(path: str, processor: Wav2Vec2Processor) -> Dataset:
+    """Load a data-split .tsv file as a `Dataset`.
+
+    :param path: The path to the file
+    :type path: str
+    :param processor: A processor object to encode the audio with
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: A Dataset containing the audio samples and transcriptions
+    :rtype: :class:`datasets.Dataset`
+
+    The returned dataset has the following keys:
+
+    * `audio` (`str`): The filename of the audio sample
+    * `start` (`float`): The start time within the file in seconds
+    * `end` (`float`): The end time within the file in seconds
+    * `text` (`str`): The text of the sample
+    * `speech` (:class:`numpy.ndarray`): The audio signal
+    * `input_values` (:class:`torch.Tensor`): The input features to the model
+    * `labels` (:class:`torch.Tensor`): The expected model output values
+    """
     sampling_rate = 16000
     dirname = os.path.dirname(path)
-    def load_audio(entry):
+    def load(entry):
         nonlocal sampling_rate, dirname
         start = int(float(entry['start'])*sampling_rate)
         end = int(float(entry['end'])*sampling_rate)
@@ -248,41 +316,36 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Dataset:
                                     num_frames=(end-start))
         entry['speech'] = speech[0].numpy()
         return entry
-    def pad_audio(batch):
+    def pad(batch):
         nonlocal sampling_rate, processor
-        ret = processor(batch['speech'], sampling_rate=sampling_rate, text=batch['text'])
+        ret = processor(batch['speech'], sampling_rate=sampling_rate,
+                        text=batch['text'])
         batch['input_values'] = ret.input_values
         batch['labels'] = ret.labels
         return batch
     data = Dataset.from_csv(path, sep='\t')
-    # There have to be 2 separate map() steps because one is batched and the other isn't
-    return data.map(load_audio).map(pad_audio, batch_size=8, num_proc=4, batched=True)
+    # There have to be 2 separate map() steps because one is batched
+    # and the other isn't
+    return data.map(load).map(pad, batch_size=8, num_proc=4, batched=True)
 
 # originally from https://github.com/huggingface/transformers/blob/9a06b6b11bdfc42eea08fa91d0c737d1863c99e3/examples/research_projects/wav2vec2/run_asr.py#L81
 @dataclass
 class DataCollatorCTCWithPadding:
-    """
-    Data collator that will dynamically pad the inputs received.
-    Args:
-        processor (:class:`~transformers.Wav2Vec2Processor`)
-            The processor used for proccessing the data.
-        padding (:obj:`bool`, :obj:`str` or :class:`~transformers.tokenization_utils_base.PaddingStrategy`, `optional`, defaults to :obj:`True`):
-            Select a strategy to pad the returned sequences (according to the model's padding side and padding index)
-            among:
-            * :obj:`True` or :obj:`'longest'`: Pad to the longest sequence in the batch (or no padding if only a single
-              sequence if provided).
-            * :obj:`'max_length'`: Pad to a maximum length specified with the argument :obj:`max_length` or to the
-              maximum acceptable input length for the model if that argument is not provided.
-            * :obj:`False` or :obj:`'do_not_pad'` (default): No padding (i.e., can output a batch with sequences of
-              different lengths).
-        max_length (:obj:`int`, `optional`):
-            Maximum length of the ``input_values`` of the returned list and optionally padding length (see above).
-        max_length_labels (:obj:`int`, `optional`):
-            Maximum length of the ``labels`` returned list and optionally padding length (see above).
-        pad_to_multiple_of (:obj:`int`, `optional`):
-            If set will pad the sequence to a multiple of the provided value.
-            This is especially useful to enable the use of Tensor Cores on NVIDIA hardware with compute capability >=
-            7.5 (Volta).
+    """Data collator that will dynamically pad the inputs received.
+
+    :ivar processor: The processor used for proccessing the data.
+    :ivar padding: Select a strategy to pad the returned sequences (according to
+        the model's padding side and padding index) among:
+
+        * :obj:`True` or :obj:`'longest'`: Pad to the longest sequence in the batch (or no padding if only a single sequence if provided).
+        * :obj:`'max_length'`: Pad to a maximum length specified with the argument :obj:`max_length` or to the maximum acceptable input length for the model if that argument is not provided.
+        * :obj:`False` or :obj:`'do_not_pad'` (default): No padding (i.e., can output a batch with sequences of different lengths).
+
+    :ivar max_length: Maximum length of the ``input_values`` of the returned list and optionally padding length (see above).
+    :ivar max_length_labels: Maximum length of the ``labels`` returned list and optionally padding length (see above).
+    :ivar pad_to_multiple_of: If set will pad the sequence to a multiple of the
+        provided value. This is especially useful to enable the use of Tensor
+        Cores on NVIDIA hardware with compute capability >= 7.5 (Volta).
     """
 
     processor: Wav2Vec2Processor
@@ -293,8 +356,8 @@ class DataCollatorCTCWithPadding:
     pad_to_multiple_of_labels: Optional[int] = None
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # split inputs and labels since they have to be of different lenghts and need
-        # different padding methods
+        # split inputs and labels since they have to be of different lenghts and
+        # need different padding methods
         input_features = [{"input_values": feature["input_values"]} for feature in features]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
@@ -380,13 +443,13 @@ def train_on_data(processor, out_dir, train, dev,
     )
     trainer.train()
 
-def train(data_dir: str, model_dir: str, **kwargs):
+def train(data_dir: str, model_dir: str, **kwargs) -> None:
     processor = make_processor(data_dir, model_dir)
     train = load_samples(os.path.join(data_dir, 'train.tsv'), processor)
     dev = load_samples(os.path.join(data_dir, 'dev.tsv'), processor)
     train_on_data(processor, model_dir, train, dev, **kwargs)
 
-def list_checkpoints(model_dir: str):
+def list_checkpoints(model_dir: str) -> List[str]:
     return glob.glob('checkpoint-*', root_dir=model_dir)
 
 def load_processor(model_dir: str):
@@ -395,13 +458,39 @@ def load_processor(model_dir: str):
 def load_checkpoint(model_dir: str, checkpoint: str):
     return Wav2Vec2ForCTC.from_pretrained(os.path.join(model_dir, checkpoint)).to('cuda')
 
-def predict_tensor(tensor, model, processor):
-    input_dict = processor(tensor, return_tensors='pt', padding=True, sampling_rate=16000)
+def predict_tensor(tensor: torch.Tensor, model: Wav2Vec2ForCTC,
+                   processor: Wav2Vec2Processor) -> str:
+    """Pass a feature tensor to a trained model and return the predicted string.
+
+    :param tensor: The input audio clip
+    :type tensor: :class:`torch.Tensor`
+    :param model: The trained model
+    :type model: :class:`transformers.Wav2Vec2ForCTC`
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: The predicted string
+    :rtype: str
+    """
+    input_dict = processor(tensor, return_tensors='pt', padding=True,
+                           sampling_rate=16000)
     logits = model(input_dict.input_values.to('cuda')).logits
     pred_ids = torch.argmax(logits, dim=-1)[0]
     return processor.decode(pred_ids)
 
-def predict_test_set(data, model, processor):
+def predict_test_set(data: Dataset, model: Wav2Vec2ForCTC,
+                     processor: Wav2Vec2Processor) -> Dataset:
+    """Predict labels for all samples in a dataset.
+
+    :param data: The input dataset (see :func:`load_samples`)
+    :type tensor: :class:`datasets.Dataset`
+    :param model: The trained model
+    :type model: :class:`transformers.Wav2Vec2ForCTC`
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: The input dataset with the added key `prediction` (`str`)
+        containing the predicted text
+    :rtype: :class:`datasets.Dataset`
+    """
     def pred(sample):
         sample['prediction'] = predict_tensor(sample['input_values'], model, processor)
         return sample
