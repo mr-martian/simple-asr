@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from datasets import Dataset
-#from ffmpeg import FFmpeg
 import jiwer
 import numpy as np
 import torch
@@ -113,20 +112,20 @@ def load_eaf(path: str, tiernames: List[str]) -> List[Tuple[float, float, str]]:
     ret.sort()
     return ret
 
-def downsample_audio(path: str, out_dir: str) -> str:
+def downsample_audio(path: str, data_dir: str) -> str:
     """Copy an audio file to a specified directory as a 16kHz .wav file
 
     :param path: The path to the original file
     :type path: str
-    :param out_dir: The path to the destination directory
-    :type out_dir: str
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
     :return: The name (not the full path) of the generated file
     :rtype: str
     """
     fname = os.path.basename(path)
     name, ext = os.path.splitext(fname)
     out_name = name + '.wav'
-    out_path = os.path.join(out_dir, out_name)
+    out_path = os.path.join(data_dir, out_name)
     subprocess.run(['ffmpeg', '-y',      # overwrite
                     '-i', path,          # read input file
                     '-ac', '1',          # output as mono sound (not stereo)
@@ -154,32 +153,32 @@ def load_manifest(directory: str) -> Set[str]:
     else:
         return set()
 
-def add_audio(path: str, out_dir: str,
+def add_audio(path: str, data_dir: str,
               overwrite: bool = False,
               manifest: Optional[Set[str]] = None) -> bool:
     """Add an audio file to the data directory if it does not already exist.
 
     :param path: The path to the audio file
     :type path: str
-    :param out_dir: The data directory
-    :type out_dir: str
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
     :param overwrite: If ``True``, do not check whether the file has already
-        been copied to `out_dir`, defaults to ``False``
+        been copied to `data_dir`, defaults to ``False``
     :type overwrite: bool, optional
     :param manifest: The contents of the manifest file
         (see :func:`load_manifest`)
-    :type manifest: set
+    :type manifest: set, optional
 
     If this function is being called in a loop, it can be passed the result
-    of calling ``load_manifest(out_dir)`` to save disk reads.
+    of calling ``load_manifest(data_dir)`` to save disk reads.
     """
-    pathlib.Path(out_dir).mkdir(exist_ok=True)
+    pathlib.Path(data_dir).mkdir(exist_ok=True)
     if manifest is None and not overwrite:
-        manifest = load_manifest(out_dir)
+        manifest = load_manifest(data_dir)
     name = os.path.basename(path)
     if overwrite or name not in manifest:
-        name = downsample_audio(path, out_dir)
-        with open(os.path.join(out_dir, 'MANIFEST.txt'), 'a') as fout:
+        name = downsample_audio(path, data_dir)
+        with open(os.path.join(data_dir, 'MANIFEST.txt'), 'a') as fout:
             fout.write(name + '\n')
         if manifest is not None:
             manifest.add(name)
@@ -187,17 +186,50 @@ def add_audio(path: str, out_dir: str,
     return False
 
 def add_elan_file(audio_path: str, elan_path: str, tiernames: Sequence[str],
-                  out_dir: str, overwrite: bool = False,
+                  data_dir: str, overwrite: bool = False,
                   manifest: Optional[Set[str]] = None) -> None:
-    isnew = add_audio(audio_path, out_dir, overwrite, manifest)
+    """Convert an ELAN file to a segments file and add the matching audio file.
+
+    :param audio_path: The path to the audio file
+    :type audio_path: str
+    :param elan_path: The path to the ELAN (.eaf) file
+    :type elan_path: str
+    :param tiernames: The names of the tiers to extract into the segments file
+    :type tiernames: list
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
+    :param overwrite: Whether to overwrite output files if they already exist,
+        defaults to ``False``
+    :type overwrite: bool, optional
+    :param manifest: The contents of the manifest file
+        (see :func:`load_manifest`)
+    :type manifest: set, optional
+    """
+    isnew = add_audio(audio_path, data_dir, overwrite, manifest)
     if isnew:
         annotations = load_eaf(elan_path, tiernames)
         name = os.path.splitext(os.path.basename(audio_path))[0]
-        with open(os.path.join(out_dir, name + '.segments.tsv'), 'w') as fout:
+        with open(os.path.join(data_dir, name + '.segments.tsv'), 'w') as fout:
             fout.write(''.join(f'{x[0]}\t{x[1]}\t{x[2]}\n' for x in annotations))
 
-def add_common_voice_files(cv_dir: str, data_dir: str,
-                           overwrite: bool = False, use_other: bool = False):
+def add_common_voice_files(cv_dir: str, data_dir: str, overwrite: bool = False,
+                           use_other: bool = False) -> None:
+    """Add audio files from a Common Voice download.
+
+    :param cv_dir: The directory of the Common Voice download
+    :type cv_dir: str
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
+    :param overwrite: Whether to overwrite output files if they already exist,
+        defaults to ``False``
+    :type overwrite: bool, optional
+    :param use_other: Whether to include non-validated audio clips,
+        defaults to ``False``
+    :type use_other: bool, optional
+
+    This function will read the contents of ``validated.tsv`` in ``cv_dir``,
+    and will add ``other.tsv`` if ``use_other`` is ``True``.
+    """
     times = {}
     with open(os.path.join(cv_dir, 'times.txt')) as fin:
         for line in fin:
@@ -276,13 +308,25 @@ def split_data(directory: str, clean_fn: Callable[[str], str]) -> None:
     with open(os.path.join(directory, 'vocab.json'), 'w') as fout:
         json.dump(char_dict, fout)
 
-def make_processor(data_dir: str, model_dir: Optional[str] = None) -> Wav2Vec2Processor:
+def make_processor(data_dir: str, model_dir: str) -> Wav2Vec2Processor:
+    """Create a new data processor.
+
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
+    :param model_dir: The directory for saved model files
+    :type model_dir: str
+    :return: A processor object
+    :rtype: :class:`transformers.Wav2Vec2Processor`
+
+    This function creates a tokenizer using the ``vocab.json`` file created
+    by :func:`split_data` and an audio feature extractor and saves the result
+    to ``model_dir``.
+    """
     vocab = os.path.join(data_dir, 'vocab.json')
     tokenizer = Wav2Vec2CTCTokenizer(vocab, unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
     feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, padding_value=0.0, do_normalize=True, return_attention_mask=True)
     processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
-    if model_dir is not None:
-        processor.save_pretrained(model_dir)
+    processor.save_pretrained(model_dir)
     return processor
 
 def load_samples(path: str, processor: Wav2Vec2Processor) -> Dataset:
@@ -401,8 +445,8 @@ def compute_wer(processor):
     import evaluate
     return metric_computer({'wer': evaluate.load('wer')}, processor)
 
-def train_on_data(processor, out_dir, train, dev,
-                  epochs: int = 100):
+def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
+                  dev: Dataset, epochs: int = 100) -> None:
     model = Wav2Vec2ForCTC.from_pretrained(
         "facebook/wav2vec2-large-xlsr-53",
         attention_dropout=0.1,
@@ -417,7 +461,7 @@ def train_on_data(processor, out_dir, train, dev,
     )
     model.freeze_feature_encoder()
     training_args = TrainingArguments(
-        output_dir=out_dir,
+        output_dir=model_dir,
         group_by_length=True,
         per_device_train_batch_size=8,
         gradient_accumulation_steps=2,
@@ -450,6 +494,15 @@ def train(data_dir: str, model_dir: str, **kwargs) -> None:
     train_on_data(processor, model_dir, train, dev, **kwargs)
 
 def list_checkpoints(model_dir: str) -> List[str]:
+    """Return a list of checkpoint names found in a directory.
+
+    :param model_dir: The directory where a model was saved
+    :type model_dir: str
+    :return: The list of checkpoints
+    :rtype: list
+
+    Checkpoint names are of the form ``'checkpoint-####'``, where ``'####'`` is the step number.
+    """
     return glob.glob('checkpoint-*', root_dir=model_dir)
 
 def load_processor(model_dir: str):
