@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 from datasets import Dataset
+import evaluate
 import jiwer
 import numpy as np
 import torch
 import torchaudio
-from transformers import Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
+from transformers import EvalPrediction, Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
 
 import argparse
 from dataclasses import dataclass
@@ -427,7 +428,19 @@ class DataCollatorCTCWithPadding:
 
         return batch
 
-def metric_computer(metrics, processor):
+def metric_computer(metrics: Dict[str, evaluate.EvaluationModule],
+                    processor: Wav2Vec2Processor) -> Callable[[EvalPrediction],
+                                                              Dict[str, float]]:
+    """Generate a callback for computing metrics during training.
+
+    :param metrics: A dictionary mapping names to evaluation metrics loaded
+        with :func:`evaluate.load`
+    :type metrics: dict
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: A callback
+    :rtype: function
+    """
     def compute_metrics(prediction):
         pred_logits = prediction.predictions
         pred_ids = np.argmax(pred_logits, axis=-1)
@@ -441,12 +454,32 @@ def metric_computer(metrics, processor):
         return ret
     return compute_metrics
 
-def compute_wer(processor):
-    import evaluate
+def compute_wer(processor: Wav2Vec2Processor) -> Callable[[EvalPrediction],
+                                                          Dict[str, float]]:
+    """Generate a callback for computing Word-Error Rate during training.
+
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: A callback
+    :rtype: function
+    """
     return metric_computer({'wer': evaluate.load('wer')}, processor)
 
 def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
                   dev: Dataset, epochs: int = 100) -> None:
+    """Train a model on a particular set of data.
+
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :param model_dir: The directory where the model will be saved
+    :type model_dir: str
+    :param train: The training data (see :func:`load_samples`)
+    :type train: :class:`datasets.Dataset`
+    :param dev: The development (validation) data (see :func:`load_samples`)
+    :type dev: :class:`datasets.Dataset`
+    :param epochs: The number of epochs to train, defaults to ``100``
+    :type epochs: int, optional
+    """
     model = Wav2Vec2ForCTC.from_pretrained(
         "facebook/wav2vec2-large-xlsr-53",
         attention_dropout=0.1,
@@ -488,6 +521,16 @@ def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
     trainer.train()
 
 def train(data_dir: str, model_dir: str, **kwargs) -> None:
+    """Train a model.
+
+    :param data_dir: The directory containing the preprocessed data
+    :type data_dir: str
+    :param model_dir: The directory where the model will be saved
+    :type model_dir: str
+
+    The keyword arguments for this function are the same as for
+    :func:`train_on_data`.
+    """
     processor = make_processor(data_dir, model_dir)
     train = load_samples(os.path.join(data_dir, 'train.tsv'), processor)
     dev = load_samples(os.path.join(data_dir, 'dev.tsv'), processor)
@@ -505,11 +548,28 @@ def list_checkpoints(model_dir: str) -> List[str]:
     """
     return glob.glob('checkpoint-*', root_dir=model_dir)
 
-def load_processor(model_dir: str):
+def load_processor(model_dir: str) -> Wav2Vec2Processor:
+    """Load a saved processor.
+
+    :param model_dir: The directory where a model was saved
+    :type model_dir: str
+    :return: The processor
+    :rtype: :class:`transformers.Wav2Vec2Processor`
+    """
     return Wav2Vec2Processor.from_pretrained(model_dir)
 
-def load_checkpoint(model_dir: str, checkpoint: str):
-    return Wav2Vec2ForCTC.from_pretrained(os.path.join(model_dir, checkpoint)).to('cuda')
+def load_checkpoint(model_dir: str, checkpoint: str) -> Wav2Vec2ForCTC:
+    """Load a model checkpoint.
+
+    :param model_dir: The directory where a model was saved
+    :type model_dir: str
+    :param checkpoint: The name of the checkpoint
+    :type checkpoint: str
+    :return: The model
+    :rtype: :class:`transformers.Wav2Vec2ForCTC`
+    """
+    pth = os.path.join(model_dir, checkpoint)
+    return Wav2Vec2ForCTC.from_pretrained(pth).to('cuda')
 
 def predict_tensor(tensor: torch.Tensor, model: Wav2Vec2ForCTC,
                    processor: Wav2Vec2Processor) -> str:
@@ -535,7 +595,7 @@ def predict_test_set(data: Dataset, model: Wav2Vec2ForCTC,
     """Predict labels for all samples in a dataset.
 
     :param data: The input dataset (see :func:`load_samples`)
-    :type tensor: :class:`datasets.Dataset`
+    :type data: :class:`datasets.Dataset`
     :param model: The trained model
     :type model: :class:`transformers.Wav2Vec2ForCTC`
     :param processor: The feature processor
@@ -549,14 +609,42 @@ def predict_test_set(data: Dataset, model: Wav2Vec2ForCTC,
         return sample
     return data.map(pred)
 
-def evaluate_test_set(data):
+def evaluate_test_set(data: Dataset) -> Dataset:
+    """Calculate the error rate for a dataset with predictions.
+
+    :param data: The input dataset (output of :func:`predict_test_set`)
+    :type data: :class:`datasets.Dataset`
+    :return: The input datset with the added keys `wer` (Word-Error Rate)
+        and `cer` (Character-Error Rate)
+    :rtype: :class:`datasets.Dataset`
+    """
     def ev(sample):
         sample['wer'] = jiwer.wer(sample['text'].lower(), sample['prediction'])
         sample['cer'] = jiwer.cer(sample['text'].lower(), sample['prediction'])
         return sample
     return data.map(ev)
 
-def evaluate_checkpoint(data, model_dir: str, checkpoint: str, processor=None, out_file: Optional[str] = None):
+def evaluate_checkpoint(data: Dataset, model_dir: str, checkpoint: str,
+                        processor: Optional[Wav2Vec2Processor] = None,
+                        out_file: Optional[str] = None) -> Tuple[float, float]:
+    """Evaluate a saved checkpoint on a particular set of data.
+
+    :param data: The input dataset (see :func:`load_samples`)
+    :type data: :class:`datasets.Dataset`
+    :param model_dir: The directory where a model was saved
+    :type model_dir: str
+    :param checkpoint: The name of the checkpoint
+    :type checkpoint: str
+    :param processor: The feature processor, or ``None`` to load it from
+        ``model_dir``, defaults to ``None``
+    :type processor: :class:`transformers.Wav2Vec2Processor`, optional
+    :param out_file: A file to write individual predictions to, for further
+        analysis, defaults to ``None``
+    :type out_file: str, optional
+    :return: The median Character-Error Rate (CER) and Word-Error Rate (WER)
+        of samples in the dataset as floats between 0 and 1
+    :rtype: tuple
+    """
     proc = processor if processor is not None else load_processor(model_dir)
     model = load_checkpoint(model_dir, checkpoint)
     pred_data = evaluate_test_set(predict_test_set(data, model, proc))
@@ -570,7 +658,26 @@ def evaluate_checkpoint(data, model_dir: str, checkpoint: str, processor=None, o
             fout.write(''.join(lns))
     return cer, wer
 
-def evaluate_all_checkpoints(data_dir: str, model_dir: str, log_dir: Optional[str] = None):
+def evaluate_all_checkpoints(
+        data_dir: str, model_dir: str,
+        log_dir: Optional[str] = None) -> Dict[str, Tuple[float, float]]:
+    """Evaluate every saved checkpoint from a training run.
+
+    :param data_dir: The directory for preprocessed training data
+    :type data_dir: str
+    :param model_dir: The directory for saved model files
+    :type model_dir: str
+    :param log_dir: A directory to save detailed evaluation files to,
+        defaults to ``None``
+    :type log_dir: str, optional
+    :return: A dictionary mapping checkpoint names to tuples of CER and WER
+        (as returned by :func:`evaluate_checkpoint`)
+    :rtype: dict
+
+    In addition to the files produced by :func:`evaluate_checkpoint`,
+    this function produces a file named ``median.tsv`` in ``log_dir`` which
+    contains the numbers in the returned dictionary.
+    """
     proc = load_processor(model_dir)
     checkpoints = list_checkpoints(model_dir)
     data = load_samples(os.path.join(data_dir, 'test.tsv'), proc)
