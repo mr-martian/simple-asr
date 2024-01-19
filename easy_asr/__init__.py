@@ -466,7 +466,7 @@ def compute_wer(processor: Wav2Vec2Processor) -> Callable[[EvalPrediction],
     return metric_computer({'wer': evaluate.load('wer')}, processor)
 
 def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
-                  dev: Dataset, epochs: int = 100) -> None:
+                  dev: Dataset, epochs: int = 100, fp16: bool = False) -> None:
     """Train a model on a particular set of data.
 
     :param processor: The feature processor
@@ -479,6 +479,9 @@ def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
     :type dev: :class:`datasets.Dataset`
     :param epochs: The number of epochs to train, defaults to ``100``
     :type epochs: int, optional
+    :param fp16: Whether to use half-precision floating point for training,
+        defaults to ``False``
+    :type fp16: bool, optional
     """
     model = Wav2Vec2ForCTC.from_pretrained(
         "facebook/wav2vec2-large-xlsr-53",
@@ -492,6 +495,8 @@ def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
         pad_token_id=processor.tokenizer.pad_token_id,
         vocab_size=len(processor.tokenizer)
     )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
     model.freeze_feature_encoder()
     training_args = TrainingArguments(
         output_dir=model_dir,
@@ -500,7 +505,7 @@ def train_on_data(processor: Wav2Vec2Processor, model_dir: str, train: Dataset,
         gradient_accumulation_steps=2,
         evaluation_strategy="steps",
         num_train_epochs=epochs,
-        fp16=True,
+        fp16=fp16,
         save_steps=400,
         eval_steps=100,
         logging_steps=50,
@@ -732,8 +737,9 @@ def cli_train():
     parser.add_argument('data_dir', action='store')
     parser.add_argument('model_dir', action='store')
     parser.add_argument('--epochs', '-e', type=int, default=100)
+    parser.add_argument('--fp16', action='store_true')
     args = parser.parse_args()
-    train(args.data_dir, args.model_dir, epochs=args.epochs)
+    train(args.data_dir, args.model_dir, epochs=args.epochs, fp16=args.fp16)
 
 def cli_eval():
     parser = argparse.ArgumentParser('Evaluate an ASR model')
