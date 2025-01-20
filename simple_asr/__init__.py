@@ -9,6 +9,7 @@ import torchaudio
 from transformers import EvalPrediction, Trainer, TrainingArguments, Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2Processor, Wav2Vec2ForCTC
 
 import argparse
+import csv
 from dataclasses import dataclass
 import glob
 import json
@@ -17,6 +18,7 @@ import pathlib
 import random
 import statistics
 import subprocess
+import tempfile
 from typing import Any, Callable, Dict, List, Optional, Tuple, Sequence, Set, Union
 import unicodedata
 from xml.etree import ElementTree as ET
@@ -551,7 +553,8 @@ def list_checkpoints(model_dir: str) -> List[str]:
 
     Checkpoint names are of the form ``'checkpoint-####'``, where ``'####'`` is the step number.
     """
-    return glob.glob('checkpoint-*', root_dir=model_dir)
+    return sorted(glob.glob('checkpoint-*', root_dir=model_dir),
+                  key=lambda x: int(x[11:]) if x[11:].isdigit() else 0)
 
 def load_processor(model_dir: str) -> Wav2Vec2Processor:
     """Load a saved processor.
@@ -700,6 +703,34 @@ def evaluate_all_checkpoints(
                 fout.write(f'{chk}\t{cer}\t{wer}\n')
     return scores
 
+def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
+                       processor: Wav2Vec2Processor) -> List[Tuple[float, float, str]]:
+    """Transcribe audio segments from a file.
+
+    :param infile: The input audio file
+    :type infile: str
+    :param model: The trained model
+    :type model: :class:`transformers.Wav2Vec2ForCTC`
+    :param processor: The feature processor
+    :type processor: :class:`transformers.Wav2Vec2Processor`
+    :return: Predicted strings with start and end time stamps
+    :rtype: list
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        fname = downsample_audio(infile, tmp.name)
+        speech, _ = torchaudio.load(os.path.join(tmp.name, fname))
+
+        # TODO: this just splits into 10-second chunks
+        # is it worth doing something more intelligent?
+        sampling_rate = 16000
+        step = sampling_rate * 10
+        ret = []
+        for i in range(0, len(speech), step):
+            ret.append((float(i) / sampling_rate,
+                        float(i+step) / sampling_rate,
+                        predict_tensor(speech[i:i+step], model, processor)))
+        return ret
+
 ### CLI
 
 def cli_elan():
@@ -750,4 +781,20 @@ def cli_eval():
     print(f'Wrote evaluation logs to {args.model_dir}.')
 
 def cli_predict():
-    pass
+    parser = argparse.ArgumentParser('Use an ASR model to transcribe files')
+    parser.add_argument('model_dir', action='store')
+    parser.add_argument('audio_file', action='store')
+    parser.add_argument('output', action='store')
+    parser.add_argument('--checkpoint', action='store')
+    args = parser.parse_args()
+    processor = load_processor(args.model_dir)
+    cp = args.checkpoint
+    if not cp:
+        cp = list_checkpoints(args.model_dir)[-1]
+    model = load_checkpoint(args.model_dir, cp)
+    with open(args.output, 'w', newline='') as fout:
+        writer = csv.writer(fout)
+        writer.writerow(['start', 'end', 'text'])
+        writer.writerows(predict_audio_file(args.audio_file, model,
+                                            processor))
+    print(f'Wrote transcript to {args.audio_file}.')
