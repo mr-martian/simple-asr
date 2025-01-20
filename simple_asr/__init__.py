@@ -717,8 +717,8 @@ def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
     :rtype: list
     """
     with tempfile.TemporaryDirectory() as tmp:
-        fname = downsample_audio(infile, tmp.name)
-        speech, _ = torchaudio.load(os.path.join(tmp.name, fname))
+        fname = downsample_audio(infile, tmp)
+        speech, _ = torchaudio.load(os.path.join(tmp, fname))
 
         # TODO: this just splits into 10-second chunks
         # is it worth doing something more intelligent?
