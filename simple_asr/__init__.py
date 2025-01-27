@@ -719,21 +719,22 @@ def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
     with tempfile.TemporaryDirectory() as tmp:
         fname = downsample_audio(infile, tmp)
         path = os.path.join(tmp, fname)
-        speech_array, sampling_rate = torchaudio.load(path)
-
-        input_values = processor(speech_array[0].numpy(),
-                                 sampling_rate=sampling_rate).input_values
+        tsv = os.path.join(tmp, 'data.tsv')
+        metadata = torchaudio.info(path)
+        length = float(metadata.num_frames) / metadata.sample_rate
         # TODO: this just splits into 10-second chunks
         # is it worth doing something more intelligent?
-        step = sampling_rate * 10
-        ret = []
-        for i in range(0, len(input_values), step):
-            print(f'predicting {i=} ... {i+step=}')
-            ret.append((float(i) / sampling_rate,
-                        float(i+step) / sampling_rate,
-                        predict_tensor(input_values[i:i+step],
-                                       model, processor)))
-        return ret
+        with open(tsv, 'w') as fout:
+            fout.write('audio\tstart\tend\n')
+            i = 0
+            while i + 10 < length:
+                fout.write(f'{fname}\t{i}.0\t{i+10}.0\n')
+                i += 10
+            fout.write(f'{fname}\t{i}.0\t{length}\n')
+        data = predict_test_set(load_samples(path, processor),
+                                model, processor)
+        return [(sample['start'], sample['end'], sample['prediction'])
+                for sample in data]
 
 ### CLI
 
