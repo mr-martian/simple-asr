@@ -728,6 +728,7 @@ def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
         step = sampling_rate * 10
         ret = []
         for i in range(0, len(input_values), step):
+            print(f'predicting {i=} ... {i+step=}')
             ret.append((float(i) / sampling_rate,
                         float(i+step) / sampling_rate,
                         predict_tensor(input_values[i:i+step],
