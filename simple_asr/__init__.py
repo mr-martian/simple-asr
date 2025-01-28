@@ -731,7 +731,7 @@ def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
                 fout.write(f'{fname}\t{i}.0\t{i+10}.0\n')
                 i += 10
             fout.write(f'{fname}\t{i}.0\t{length}\n')
-        data = predict_test_set(load_samples(path, processor),
+        data = predict_test_set(load_samples(tsv, processor),
                                 model, processor)
         return [(sample['start'], sample['end'], sample['prediction'])
                 for sample in data]
