@@ -725,12 +725,12 @@ def predict_audio_file(infile: str, model: Wav2Vec2ForCTC,
         # TODO: this just splits into 10-second chunks
         # is it worth doing something more intelligent?
         with open(tsv, 'w') as fout:
-            fout.write('audio\tstart\tend\n')
+            fout.write('audio\tstart\tend\ttext\n')
             i = 0
             while i + 10 < length:
-                fout.write(f'{fname}\t{i}.0\t{i+10}.0\n')
+                fout.write(f'{fname}\t{i}.0\t{i+10}.0\t_\n')
                 i += 10
-            fout.write(f'{fname}\t{i}.0\t{length}\n')
+            fout.write(f'{fname}\t{i}.0\t{length}\t_\n')
         data = predict_test_set(load_samples(tsv, processor),
                                 model, processor)
         return [(sample['start'], sample['end'], sample['prediction'])
