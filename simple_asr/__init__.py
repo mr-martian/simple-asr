@@ -802,4 +802,4 @@ def cli_predict():
         writer.writerow(['start', 'end', 'text'])
         writer.writerows(predict_audio_file(args.audio_file, model,
                                             processor))
-    print(f'Wrote transcript to {args.audio_file}.')
+    print(f'Wrote transcript to {args.output}.')
