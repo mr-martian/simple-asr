@@ -23,6 +23,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Sequence, Set, Un
 import unicodedata
 from xml.etree import ElementTree as ET
 
+SAMPLING_RATE = 16000
+
 ### Functions
 
 def clean_text_unicode(text: str,
@@ -327,7 +329,7 @@ def make_processor(data_dir: str, model_dir: str) -> Wav2Vec2Processor:
     """
     vocab = os.path.join(data_dir, 'vocab.json')
     tokenizer = Wav2Vec2CTCTokenizer(vocab, unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
-    feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, padding_value=0.0, do_normalize=True, return_attention_mask=True)
+    feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=SAMPLING_RATE, padding_value=0.0, do_normalize=True, return_attention_mask=True)
     processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
     processor.save_pretrained(model_dir)
     return processor
@@ -352,20 +354,19 @@ def load_samples(path: str, processor: Wav2Vec2Processor) -> Dataset:
     * `input_values` (:class:`torch.Tensor`): The input features to the model
     * `labels` (:class:`torch.Tensor`): The expected model output values
     """
-    sampling_rate = 16000
     dirname = os.path.dirname(path)
     def load(entry):
-        nonlocal sampling_rate, dirname
-        start = int(float(entry['start'])*sampling_rate)
-        end = int(float(entry['end'])*sampling_rate)
+        nonlocal dirname
+        start = int(float(entry['start'])*SAMPLING_RATE)
+        end = int(float(entry['end'])*SAMPLING_RATE)
         speech, _ = torchaudio.load(os.path.join(dirname, entry['audio']),
                                     frame_offset=start,
                                     num_frames=(end-start))
         entry['speech'] = speech[0].numpy()
         return entry
     def pad(batch):
-        nonlocal sampling_rate, processor
-        ret = processor(batch['speech'], sampling_rate=sampling_rate,
+        nonlocal processor
+        ret = processor(batch['speech'], sampling_rate=SAMPLING_RATE,
                         text=batch['text'])
         batch['input_values'] = ret.input_values
         batch['labels'] = ret.labels
@@ -566,17 +567,21 @@ def load_processor(model_dir: str) -> Wav2Vec2Processor:
     """
     return Wav2Vec2Processor.from_pretrained(model_dir)
 
-def load_checkpoint(model_dir: str, checkpoint: str) -> Wav2Vec2ForCTC:
+def load_checkpoint(model_dir: str, checkpoint: Optional[str] = None) -> Wav2Vec2ForCTC:
     """Load a model checkpoint.
 
     :param model_dir: The directory where a model was saved
     :type model_dir: str
     :param checkpoint: The name of the checkpoint
+    (defaults to last checkpoint if ommitted)
     :type checkpoint: str
     :return: The model
     :rtype: :class:`transformers.Wav2Vec2ForCTC`
     """
-    pth = os.path.join(model_dir, checkpoint)
+    cp = checkpoint
+    if cp is None:
+        cp = list_checkpoints(model_dir)[-1]
+    pth = os.path.join(model_dir, cp)
     return Wav2Vec2ForCTC.from_pretrained(pth).to('cuda')
 
 def predict_tensor(tensor: torch.Tensor, model: Wav2Vec2ForCTC,
@@ -593,7 +598,7 @@ def predict_tensor(tensor: torch.Tensor, model: Wav2Vec2ForCTC,
     :rtype: str
     """
     input_dict = processor(tensor, return_tensors='pt', padding=True,
-                           sampling_rate=16000)
+                           sampling_rate=SAMPLING_RATE)
     logits = model(input_dict.input_values.to('cuda')).logits
     pred_ids = torch.argmax(logits, dim=-1)[0]
     return processor.decode(pred_ids)
@@ -793,10 +798,7 @@ def cli_predict():
     parser.add_argument('--checkpoint', action='store')
     args = parser.parse_args()
     processor = load_processor(args.model_dir)
-    cp = args.checkpoint
-    if not cp:
-        cp = list_checkpoints(args.model_dir)[-1]
-    model = load_checkpoint(args.model_dir, cp)
+    model = load_checkpoint(args.model_dir, args.checkpoint)
     with open(args.output, 'w', newline='') as fout:
         writer = csv.writer(fout)
         writer.writerow(['start', 'end', 'text'])

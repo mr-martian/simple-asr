@@ -1,0 +1,87 @@
+from collections import defaultdict
+import os.path
+import simple_asr
+import tgt
+import torch
+import torchaudio
+from torchaudio.functional import forced_align, merge_tokens
+
+def align(model, processor, audio, clean_transcript: str):
+    with torch.inference_mode():
+        emission, _ = model(audio)
+    tokens = processor(text=clean_transcript,
+                       return_tensors='pt')
+    alignments, scores = forced_align(emission, tokens, blank=0)
+    return merge_tokens(alignments[0], scores[0])
+
+def to_textgrid(letter_tier, word_tier, offset: float,
+                spans, transcript):
+    word_start = None
+    word_end = None
+    word = ''
+    for i, (span, char) in enumerate(zip(spans, list(transcript))):
+        if char == ' ':
+            if word:
+                word_tier.add_interval(tgt.core.Interval(
+                    word_start, word_end, word))
+            word_start = None
+            word_end = None
+            word = ''
+        else:
+            start = (span.start / simple_asr.SAMPLING_RATE) + offset
+            end = (span.end / simple_asr.SAMPLING_RATE) + offset
+            letter_tier.add_interval(tgt.core.Interval(
+                start, end, char))
+            if word_start is None:
+                word_start = start
+            word_end = end
+            word += char
+    if word:
+        word_tier.add_interval(tgt.core.Interval(
+            word_start, word_end, word))
+
+def align_file(path: str, model, processor, textgrid_path: str,
+               clean_fn=simple_asr.clean_text_unicode):
+    words = tgt.core.IntervalTier()
+    letters = tgt.core.IntervalTier()
+    segments = os.path.splitext(path)[0] + '.segments.tsv'
+    with open(segments) as fin:
+        for line in fin:
+            ls = line.split('\t', 2)
+            if len(ls) != 3:
+                continue
+            start = float(ls[0])
+            end = float(ls[1])
+            txt = clean_fn(ls[2].replace('\t', ' ')).strip().lower()
+            if not txt:
+                continue
+            speech, _ = torchaudio.load(
+                path, frame_offset=int(start * simple_asr.SAMPLING_RATE),
+                num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
+            spans = align(model, processor, speech.to('cuda'), txt)
+            to_textgrid(letters, words, start, spans, txt)
+    grid = tgt.core.TextGrid()
+    grid.add_tier(words)
+    grid.add_tier(letters)
+    tgt.io.write_to_file(grid, textgrid_path)
+
+def align_all_training_data(data_dir: str, model_dir: str,
+                            textgrid_dir: str, checkpoint=None):
+    processor = simple_asr.load_processor(model_dir)
+    model = simple_asr.load_checkpoint(model_dir, checkpoint)
+    manifest = sorted(simple_asr.load_manifest(data_dir))
+    for audio in manifest:
+        tg_path = os.path.join(textgrid_dir,
+                               os.path.splitext(audio)[0]+'.TextGrid')
+        align_file(os.path.join(data_dir, audio), model, processor,
+                   tg_path)
+
+def cli_align_training_data():
+    parser = argparse.ArgumentParser('Train an ASR model')
+    parser.add_argument('data_dir', action='store')
+    parser.add_argument('model_dir', action='store')
+    parser.add_argument('textgrid_dir', action='store')
+    parser.add_argument('--checkpoint', action='store')
+    args = parser.parse_args()
+    align_all_training_data(args.data_dir, args.model_dir,
+                            args.textgrid_dir, args.checkpoint)
