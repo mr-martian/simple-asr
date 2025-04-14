@@ -42,8 +42,9 @@ def to_textgrid(letter_tier, word_tier, offset: float,
 
 def align_file(path: str, model, processor, textgrid_path: str,
                clean_fn=simple_asr.clean_text_unicode):
-    words = tgt.core.IntervalTier()
-    letters = tgt.core.IntervalTier()
+    sentences = tgt.core.IntervalTier(name='Sentence')
+    words = tgt.core.IntervalTier(name='Word')
+    letters = tgt.core.IntervalTier(name='Letter')
     segments = os.path.splitext(path)[0] + '.segments.tsv'
     with open(segments) as fin:
         for line in fin:
@@ -60,7 +61,9 @@ def align_file(path: str, model, processor, textgrid_path: str,
                 num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
             spans = align(model, processor, speech.to('cuda'), txt)
             to_textgrid(letters, words, start, spans, txt)
+            sentences.add_interval(tgt.core.Interval(start, end, txt))
     grid = tgt.core.TextGrid()
+    grid.add_tier(sentences)
     grid.add_tier(words)
     grid.add_tier(letters)
     tgt.io.write_to_file(grid, textgrid_path)
