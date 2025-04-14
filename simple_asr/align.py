@@ -9,7 +9,7 @@ from torchaudio.functional import forced_align, merge_tokens
 
 def align(model, processor, audio, clean_transcript: str):
     with torch.inference_mode():
-        emission, _ = model(audio)
+        emission = model(audio)
     tokens = processor(text=clean_transcript,
                        return_tensors='pt')
     alignments, scores = forced_align(emission, tokens, blank=0)
