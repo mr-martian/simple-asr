@@ -61,7 +61,7 @@ def align_file(path: str, model, processor, vocab, textgrid_path: str,
             speech, _ = torchaudio.load(
                 path, frame_offset=int(start * simple_asr.SAMPLING_RATE),
                 num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
-            spans = align(model, processor, vocab, speech.to('cuda'), txt)
+            spans = align(model, processor, speech.to('cuda'), vocab, txt)
             to_textgrid(letters, words, start, spans, txt)
             sentences.add_interval(tgt.core.Interval(start, end, txt))
     grid = tgt.core.TextGrid()
