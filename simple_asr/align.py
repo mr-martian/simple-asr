@@ -11,13 +11,14 @@ from torchaudio.functional import forced_align, merge_tokens
 def align(model, processor, audio, vocab, clean_transcript: str):
     with torch.inference_mode():
         emission = model(audio).logits
+    num_frames = emission.size(1)
     tokens = [vocab.get(c, 0) for c in clean_transcript]
     tokens = [t for t in tokens if t != 0]
     tokens = torch.tensor([tokens], dtype=torch.int32, device='cuda')
     alignments, scores = forced_align(emission, tokens, blank=0)
-    return merge_tokens(alignments[0], scores[0])
+    return merge_tokens(alignments[0], scores[0]), num_frames
 
-def to_textgrid(letter_tier, word_tier, offset: float,
+def to_textgrid(letter_tier, word_tier, offset: float, ratio: float,
                 spans, transcript, vocab):
     word_start = None
     word_end = None
@@ -36,8 +37,8 @@ def to_textgrid(letter_tier, word_tier, offset: float,
             else:
                 word += txt[i]
             i += 1
-        start = (span.start / simple_asr.SAMPLING_RATE) + offset
-        end = (span.end / simple_asr.SAMPLING_RATE) + offset
+        start = (span.start * ratio / simple_asr.SAMPLING_RATE) + offset
+        end = (span.end * ratio / simple_asr.SAMPLING_RATE) + offset
         letter_tier.add_interval(tgt.core.Interval(
             start, end, txt[i]))
         if word_start is None:
@@ -65,8 +66,11 @@ def align_file(path: str, model, processor, vocab, textgrid_path: str,
             speech, _ = torchaudio.load(
                 path, frame_offset=int(start * simple_asr.SAMPLING_RATE),
                 num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
-            spans = align(model, processor, speech.to('cuda'), vocab, txt)
-            to_textgrid(letters, words, start, spans, txt, vocab)
+            spans, num_frames = align(model, processor, speech.to('cuda'),
+                                      vocab, txt)
+            # TODO: why do we need this?
+            ratio = speech.size(1) / num_frames
+            to_textgrid(letters, words, start, ratio, spans, txt, vocab)
             sentences.add_interval(tgt.core.Interval(start, end, txt))
     grid = tgt.core.TextGrid()
     grid.add_tier(sentences)
