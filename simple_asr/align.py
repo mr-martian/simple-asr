@@ -46,6 +46,9 @@ def to_textgrid(letter_tier, word_tier, offset: float, ratio: float,
         word_end = end
         word += txt[i]
         i += 1
+    if word:
+        word_tier.add_interval(tgt.core.Interval(
+            word_start, word_end, word))
 
 def align_file(path: str, model, processor, vocab, textgrid_path: str,
                clean_fn=simple_asr.clean_text_unicode):
