@@ -12,35 +12,39 @@ def align(model, processor, audio, vocab, clean_transcript: str):
     with torch.inference_mode():
         emission = model(audio).logits
     tokens = [vocab.get(c, 0) for c in clean_transcript]
+    tokens = [t for t in tokens if t != 0]
     tokens = torch.tensor([tokens], dtype=torch.int32, device='cuda')
     alignments, scores = forced_align(emission, tokens, blank=0)
     return merge_tokens(alignments[0], scores[0])
 
 def to_textgrid(letter_tier, word_tier, offset: float,
-                spans, transcript):
+                spans, transcript, vocab):
     word_start = None
     word_end = None
     word = ''
-    for i, (span, char) in enumerate(zip(spans, list(transcript))):
-        if char == ' ':
-            if word:
-                word_tier.add_interval(tgt.core.Interval(
-                    word_start, word_end, word))
-            word_start = None
-            word_end = None
-            word = ''
-        else:
-            start = (span.start / simple_asr.SAMPLING_RATE) + offset
-            end = (span.end / simple_asr.SAMPLING_RATE) + offset
-            letter_tier.add_interval(tgt.core.Interval(
-                start, end, char))
-            if word_start is None:
-                word_start = start
-            word_end = end
-            word += char
-    if word:
-        word_tier.add_interval(tgt.core.Interval(
-            word_start, word_end, word))
+    i = 0
+    txt = transcript + ' '
+    for span in spans:
+        while txt[i] not in vocab:
+            if char == ' ':
+                if word:
+                    word_tier.add_interval(tgt.core.Interval(
+                        word_start, word_end, word))
+                word_start = None
+                word_end = None
+                word = ''
+            else:
+                word += char
+            i += 1
+        start = (span.start / simple_asr.SAMPLING_RATE) + offset
+        end = (span.end / simple_asr.SAMPLING_RATE) + offset
+        letter_tier.add_interval(tgt.core.Interval(
+            start, end, txt[i]))
+        if word_start is None:
+            word_start = start
+        word_end = end
+        word += txt[i]
+        i += 1
 
 def align_file(path: str, model, processor, vocab, textgrid_path: str,
                clean_fn=simple_asr.clean_text_unicode):
@@ -62,7 +66,7 @@ def align_file(path: str, model, processor, vocab, textgrid_path: str,
                 path, frame_offset=int(start * simple_asr.SAMPLING_RATE),
                 num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
             spans = align(model, processor, speech.to('cuda'), vocab, txt)
-            to_textgrid(letters, words, start, spans, txt)
+            to_textgrid(letters, words, start, spans, txt, vocab)
             sentences.add_interval(tgt.core.Interval(start, end, txt))
     grid = tgt.core.TextGrid()
     grid.add_tier(sentences)
