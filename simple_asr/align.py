@@ -1,5 +1,6 @@
 import argparse
 from collections import defaultdict
+import json
 import os.path
 import simple_asr
 import tgt
@@ -7,11 +8,11 @@ import torch
 import torchaudio
 from torchaudio.functional import forced_align, merge_tokens
 
-def align(model, processor, audio, clean_transcript: str):
+def align(model, processor, audio, vocab, clean_transcript: str):
     with torch.inference_mode():
         emission = model(audio).logits
-    tokens = processor(text=clean_transcript,
-                       return_tensors='pt')
+    tokens = [vocab.get(c, 0) for c in clean_transcript]
+    tokens = torch.tensor([tokens], dtype=torch.int32, device='cuda')
     alignments, scores = forced_align(emission, tokens, blank=0)
     return merge_tokens(alignments[0], scores[0])
 
@@ -41,7 +42,7 @@ def to_textgrid(letter_tier, word_tier, offset: float,
         word_tier.add_interval(tgt.core.Interval(
             word_start, word_end, word))
 
-def align_file(path: str, model, processor, textgrid_path: str,
+def align_file(path: str, model, processor, vocab, textgrid_path: str,
                clean_fn=simple_asr.clean_text_unicode):
     sentences = tgt.core.IntervalTier(name='Sentence')
     words = tgt.core.IntervalTier(name='Word')
@@ -60,7 +61,7 @@ def align_file(path: str, model, processor, textgrid_path: str,
             speech, _ = torchaudio.load(
                 path, frame_offset=int(start * simple_asr.SAMPLING_RATE),
                 num_frames=int((end - start) * simple_asr.SAMPLING_RATE))
-            spans = align(model, processor, speech.to('cuda'), txt)
+            spans = align(model, processor, vocab, speech.to('cuda'), txt)
             to_textgrid(letters, words, start, spans, txt)
             sentences.add_interval(tgt.core.Interval(start, end, txt))
     grid = tgt.core.TextGrid()
@@ -74,11 +75,13 @@ def align_all_training_data(data_dir: str, model_dir: str,
     processor = simple_asr.load_processor(model_dir)
     model = simple_asr.load_checkpoint(model_dir, checkpoint)
     manifest = sorted(simple_asr.load_manifest(data_dir))
+    with open(os.path.join(model_dir, 'vocab.json')) as fin:
+        vocab = json.load(fin)
     for audio in manifest:
         tg_path = os.path.join(textgrid_dir,
                                os.path.splitext(audio)[0]+'.TextGrid')
         align_file(os.path.join(data_dir, audio), model, processor,
-                   tg_path)
+                   vocab, tg_path)
 
 def cli_align_training_data():
     parser = argparse.ArgumentParser('Train an ASR model')
