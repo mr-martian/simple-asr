@@ -26,7 +26,7 @@ def to_textgrid(letter_tier, word_tier, offset: float,
     txt = transcript + ' '
     for span in spans:
         while txt[i] not in vocab:
-            if char == ' ':
+            if txt[i] == ' ':
                 if word:
                     word_tier.add_interval(tgt.core.Interval(
                         word_start, word_end, word))
@@ -34,7 +34,7 @@ def to_textgrid(letter_tier, word_tier, offset: float,
                 word_end = None
                 word = ''
             else:
-                word += char
+                word += txt[i]
             i += 1
         start = (span.start / simple_asr.SAMPLING_RATE) + offset
         end = (span.end / simple_asr.SAMPLING_RATE) + offset
